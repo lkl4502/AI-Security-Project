@@ -4,6 +4,7 @@ system:
 
 data:
   uci_id: 891 # dataset id
+  val_size: 0.1
   test_size: 0.2
 
   # "under" -> 작은 샘플에 맞추기
@@ -16,18 +17,40 @@ data:
   num_workers: 2
 
 model:
-  name: "autoencoder"
+  # LR, DT, RF, IF, AE
+  name: "AE"
 
+  # AE
   lr: 0.001
-  epochs: 10
+  epochs: 20
   hidden_dim: 16
 
   # Machine Learning Params
-  n_estimators: 100 # For RF
-  contamination: 0.15 # For Isolation Forest
+  n_estimators: 100 # RF
+  contamination: 0.15 # IF
+  max_iter: 1000 # LR
+  n_jobs: -1 # RF, IF
 
-paths:
-  save_dir: "./saved_models"
+threshold:
+  type: "F1-max" # Top-k or F1-max
+  contamination: 0.15 # Top-k
+
+scheduler:
+  type: "ReduceLROnPlateau"
+  params:
+    patience: 3
+    factor: 0.5
+    min_lr: 1e-6
+    mode: "min"
+  monitor: "val_loss"
+  interval: "epoch"
+  frequency: 1
+
+logging:
+  save_dir: "./outputs"
+  save_top_k: 3
+  monitor: "val_loss" # val_auroc 도 고려
+  mode: "min" # val_auroc -> max
 
 # Wandb
 wandb:
