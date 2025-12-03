@@ -1,7 +1,7 @@
 import torch
 import wandb
 import numpy as np
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 
 from torch import nn
 
@@ -90,10 +90,10 @@ class DiabetesAutoEncoder(pl.LightningModule):
         features, labels = batch
         predictions = self(features)
         scores = torch.mean(self.loss_fn(predictions, features), dim=1)
+        self.test_step_outputs.append({"scores": scores, "labels": labels})
 
-        return {"scores": scores, "labels": labels}
-
-    def on_test_epoch_end(self, outputs):
+    def on_test_epoch_end(self):
+        outputs = self.test_step_outputs
         all_scores = torch.cat([x["scores"] for x in outputs])
         all_labels = torch.cat([x["labels"] for x in outputs]).long()
 
@@ -102,8 +102,8 @@ class DiabetesAutoEncoder(pl.LightningModule):
         self.auprc.reset()
         auroc = self.auroc(all_scores, all_labels)
         auprc = self.auprc(all_scores, all_labels)
-        self.log(f"{self.config.model.name}/auroc", auroc)
-        self.log(f"{self.config.model.name}/auprc", auprc)
+        self.log(f"{self.config.model.name}/test_auroc", auroc)
+        self.log(f"{self.config.model.name}/test_auprc", auprc)
 
         precisions, recalls, thresholds = precision_recall_curve(
             all_scores, all_labels, "binary"
@@ -124,17 +124,19 @@ class DiabetesAutoEncoder(pl.LightningModule):
         preds = (all_scores >= best_threshold).long()
 
         metrics = {
-            f"{self.config.model.name}/accuracy": accuracy(
+            f"{self.config.model.name}/test_accuracy": accuracy(
                 preds, all_labels, task="binary"
             ),
-            f"{self.config.model.name}/f1": f1_score(preds, all_labels, task="binary"),
-            f"{self.config.model.name}/recall": recall(
+            f"{self.config.model.name}/test_f1": f1_score(
                 preds, all_labels, task="binary"
             ),
-            f"{self.config.model.name}/precision": precision(
+            f"{self.config.model.name}/test_recall": recall(
                 preds, all_labels, task="binary"
             ),
-            f"{self.config.model.name}/threshold": best_threshold,
+            f"{self.config.model.name}/test_precision": precision(
+                preds, all_labels, task="binary"
+            ),
+            f"{self.config.model.name}/test_threshold": best_threshold,
         }
 
         self.log_dict(metrics)
@@ -206,20 +208,20 @@ def evaluate_and_log_sklearn(
         # Supervised Models (RF, LR, DT)
         preds = model.predict(test_features)
         if hasattr(model, "predict_proba"):
-            probs = model.predict_proba(test_features)[:, 1]  # Class 1 확률
-            scores = probs
+            scores = model.predict_proba(test_features)[:, 1]  # Class 1 확률
         else:
-            probs = preds  # 확률 미지원시 0/1 값
-            scores = preds
+            scores = preds  # 확률 미지원시 0/1 값
 
     # 2. Metric 계산 (Scikit-Learn 함수 사용)
     metrics = {
-        f"{model_name}/accuracy": accuracy_score(test_targets, preds),
-        f"{model_name}/f1": sk_f1(test_targets, preds),
-        f"{model_name}/recall": sk_recall(test_targets, preds),
-        f"{model_name}/precision": sk_precision(test_targets, preds),
-        f"{model_name}/auroc": roc_auc_score(test_targets, scores),
-        f"{model_name}/auprc": average_precision_score(test_targets, scores),
+        f"{model_name}/test_accuracy": accuracy_score(test_targets, preds),
+        f"{model_name}/test_f1": sk_f1(test_targets, preds),
+        f"{model_name}/test_recall": sk_recall(test_targets, preds),
+        f"{model_name}/test_precision": sk_precision(
+            test_targets, preds, zero_division=0.0
+        ),
+        f"{model_name}/test_auroc": roc_auc_score(test_targets, scores),
+        f"{model_name}/test_auprc": average_precision_score(test_targets, scores),
     }
 
     # 3. 콘솔 출력 및 WandB 로깅

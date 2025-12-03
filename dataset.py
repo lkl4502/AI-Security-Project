@@ -1,6 +1,7 @@
+from pandas.io.formats.format import return_docstring
 import torch
 import pandas as pd
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 
 from ucimlrepo import fetch_ucirepo
 from torch.utils.data import DataLoader, TensorDataset
@@ -8,6 +9,9 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.model_selection import train_test_split
 from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
+
+# TODO Kaggle 참고해서 EDA와 feature selection 추가
+# TODO 결과값 비슷한지 비교
 
 
 class DiabetesDataModule(pl.LightningDataModule):
@@ -23,8 +27,12 @@ class DiabetesDataModule(pl.LightningDataModule):
         # 데이터 다운로드 (최초 1회만 실행됨)
         fetch_ucirepo(id=self.config.data.uci_id)
 
-    def setup(self):
+    def setup(self, stage=None):
+        if hasattr(self, "train_features") and self.train_features is not None:
+            print(">> Already Prepare Data...")
+            return
         print(">> Loading Data...")
+        seed = self.config.system.random_seed
         cdc_diabetes = fetch_ucirepo(id=self.config.data.uci_id)
 
         total_features = cdc_diabetes.data.features
@@ -70,7 +78,6 @@ class DiabetesDataModule(pl.LightningDataModule):
         # Imbalance Handling (Sampling)
         method = self.config.data.sampling_method
         ratio = self.config.data.sampling_ratio
-        seed = self.config.system.random_seed
 
         if method == "under":
             before_len = len(self.train_features)
@@ -112,6 +119,18 @@ class DiabetesDataModule(pl.LightningDataModule):
         # DataFrame/Series 형태로 저장 (Scikit-learn용)
         # Deep Learning용 Tensor 변환은 train_dataloader에서 처리하거나 여기서 미리 변환
 
+    def get_full_train_data(self):
+        train_val_features = pd.concat(
+            [self.train_features, self.val_features], axis=0
+        ).reset_index(drop=True)
+        train_val_targets = pd.concat(
+            [self.train_targets, self.val_targets], axis=0
+        ).reset_index(drop=True)
+        return train_val_features, train_val_targets.values.ravel()
+
+    def get_normal_data(self):
+        return self.train_features[self.train_targets.iloc[:, 0] == 0]
+
     def get_sklearn_data(self):
         """Scikit-Learn 모델용 데이터 반환"""
         return (
@@ -124,7 +143,7 @@ class DiabetesDataModule(pl.LightningDataModule):
     def train_dataloader(self):
         # Autoencoder 학습용
         if self.config.model.name == "AE":
-            data = self.train_features[self.train_targets.iloc[:, 0] == 0].values
+            data = self.get_normal_data().values
         else:
             data = self.train_features.values  # 일반 Classification DL 모델일 경우
 
@@ -141,7 +160,7 @@ class DiabetesDataModule(pl.LightningDataModule):
         # validation 단계에서 성능 평가를 위해 Label과 Anomaly 데이터도 필요하기 때문
         dataset = TensorDataset(
             torch.FloatTensor(self.val_features.values),
-            torch.FloatTensor(self.val_targets.values),
+            torch.LongTensor(self.val_targets.values.ravel()),
         )
 
         return DataLoader(
@@ -154,7 +173,7 @@ class DiabetesDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         dataset = TensorDataset(
             torch.FloatTensor(self.test_features.values),
-            torch.FloatTensor(self.test_targets.values),
+            torch.LongTensor(self.test_targets.values.ravel()),
         )
 
         return DataLoader(
