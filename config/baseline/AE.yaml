@@ -1,0 +1,65 @@
+# 시스템 설정 : 시드 고정 및 device 설정
+system:
+  random_seed: 42 # 재현성
+  device: "cuda" # "cpu", "auto", "cuda"
+
+# 데이터 관련 설정
+data:
+  uci_id: 891 # dataset id
+  val_size: 0.1 # val data 비율
+  test_size: 0.2 # test data 비율
+
+  # "under" -> 소수 클래스에 맞추기
+  # "smote" -> 소수 클래스 생성하여 확장
+  # "none" -> 아무 작업 X
+  sampling_method: "none"
+  sampling_ratio: 0.5 # 비율 -> (소수 클래스 / 다수 클래스)
+
+  batch_size: 64
+  num_workers: 2
+
+model:
+  # LR(Logistic Regression), DT(Decision Tree), RF(Random Forest)
+  # IF(Isolation Forest), AE(AutoEncoder)
+  name: "AE"
+
+  # AE에만 적용되는 hyperparameter
+  lr: 0.001
+  epochs: 50
+  hidden_dim: 16 # 은닉층 차원 크기
+
+  # Machine Learning Params
+  n_estimators: 100 # RF : 트리 수
+  contamination: 0.15 # IF : 데이터 내 이상치 비율 예상치
+  max_iter: 1000 # LR : 최대 반복 수
+  n_jobs: -1 # RF, IF : 병렬 처리 코어 수
+
+threshold:
+  # Top-k : 상위 k%로 이상치 간주
+  # F1-max : F1이 최대가 되는 지점
+  type: "F1-max"
+  contamination: 0.15 # Top-k
+
+scheduler:
+  type: "ReduceLROnPlateau"
+  params:
+    patience: 3 # 성능 향상 없는 epoch 수 허용치
+    factor: 0.5 # 학습률 감소 비율
+    min_lr: 1.0e-6 # 학습률 하한선
+    mode: "max" # 지표의 좋고 나쁨 판단 기준
+  monitor: "val_auprc" # 모니터링할 지표
+  interval: "epoch" # 갱신 단위
+  frequency: 1
+
+# logging 및 checkpoint 저장 설정
+logging:
+  save_dir: "./outputs" # 경로
+  save_top_k: 3 # 성능 상위 3개 저장
+  monitor: "val_auprc" # 선정 기준 지표, val_auroc 도 고려
+  mode: "max" # val_auprc -> max
+
+# Wandb
+wandb:
+  team_name: "lkl4502-kookmin-university"
+  project_name: "AI-Security-Project"
+  experiment_name: "baseline-AE"

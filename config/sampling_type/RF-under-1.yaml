@@ -11,14 +11,14 @@ data:
   # "smote" -> 작은 샘플 생성하여 확장
   # "none" -> 아무 작업 X
   sampling_method: "under"
-  sampling_ratio: 0.5 # 비율 -> 작은 거 / 큰 거
+  sampling_ratio: 1 # 비율 -> 작은 거 / 큰 거
 
   batch_size: 64
   num_workers: 2
 
 model:
   # LR, DT, RF, IF, AE
-  name: "IF"
+  name: "RF"
 
   # AE
   lr: 0.001
@@ -29,6 +29,7 @@ model:
   n_estimators: 100 # RF
   contamination: 0.15 # IF
   max_iter: 1000 # LR
+  max_depth: 12 # DT, RF
   n_jobs: -1 # RF, IF
 
 threshold:
@@ -56,4 +57,4 @@ logging:
 wandb:
   team_name: "lkl4502-kookmin-university"
   project_name: "AI-Security-Project"
-  experiment_name: "baseline-IF"
+  experiment_name: "UNDER-1-RF"

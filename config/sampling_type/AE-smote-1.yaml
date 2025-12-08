@@ -10,19 +10,19 @@ data:
   # "under" -> 작은 샘플에 맞추기
   # "smote" -> 작은 샘플 생성하여 확장
   # "none" -> 아무 작업 X
-  sampling_method: "under"
-  sampling_ratio: 0.5 # 비율 -> 작은 거 / 큰 거
+  sampling_method: "smote"
+  sampling_ratio: 1 # 비율 -> 작은 거 / 큰 거
 
   batch_size: 64
   num_workers: 2
 
 model:
   # LR, DT, RF, IF, AE
-  name: "DT"
+  name: "AE"
 
   # AE
   lr: 0.001
-  epochs: 20
+  epochs: 50
   hidden_dim: 16
 
   # Machine Learning Params
@@ -56,4 +56,4 @@ logging:
 wandb:
   team_name: "lkl4502-kookmin-university"
   project_name: "AI-Security-Project"
-  experiment_name: "baseline-DT"
+  experiment_name: "SMOTE-1-AE"

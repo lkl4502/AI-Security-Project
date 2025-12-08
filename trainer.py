@@ -26,17 +26,22 @@ class TrainerWrapper:
         self.config = config
         self.dm = data_module
         self.model_name = config.model.name
+
+        # 결과 저장을 위한 디렉토리 생성
         self.save_dir = osp.join(config.logging.save_dir, config.wandb.experiment_name)
         os.makedirs(self.save_dir, exist_ok=True)
 
     def ml_cv_fit(self, n_splits=5):
+        """머신러닝 모델을 위한 k-Fold 교차 검증 및 학습 수행"""
         print(f"\n[Cross Validation] Start {n_splits}-Fold CV for {self.model_name}")
         train_features, train_targets = self.dm.get_full_train_data()
 
+        # 데이터 불균형을 고려한 StratifiedKFold 사용
         skf = StratifiedKFold(
             n_splits=n_splits, shuffle=True, random_state=self.config.system.random_seed
         )
 
+        # 결과 저장용 딕셔너리
         metrics_list = {
             "f1": [],
             "recall": [],
@@ -50,11 +55,13 @@ class TrainerWrapper:
         best_score = -1.0
         best_model_path = ""
 
+        # Fold 반복
         for fold, (train_idx, val_idx) in enumerate(
             skf.split(train_features, train_targets)
         ):
             print(f">> Fold {fold+1}/{n_splits}...", end=" ")
 
+            # 데이터 분할
             fold_train_features, fold_val_features = (
                 train_features.iloc[train_idx],
                 train_features.iloc[val_idx],
@@ -64,21 +71,21 @@ class TrainerWrapper:
                 train_targets[val_idx],
             )
 
+            # 모델 초기화 및 학습
             model = clone(base_model)
 
             if self.model_name == "IF":
-                fold_train_normal_features = fold_train_features[
-                    fold_train_targets == 0
-                ]
-                model.fit(fold_train_normal_features)
+                model.fit(fold_train_features)
             else:
                 model.fit(fold_train_features, fold_train_targets)
 
+            # Fold 모델 저장
             fold_save_path = os.path.join(
                 self.save_dir, f"{self.model_name}-fold{fold + 1}.pkl"
             )
             joblib.dump(model, fold_save_path)
 
+            # 예측 및 평가
             if self.model_name == "IF":
                 scores = -model.score_samples(fold_val_features)
                 preds = np.where(model.predict(fold_val_features) == -1, 1, 0)
@@ -89,8 +96,10 @@ class TrainerWrapper:
                 else:
                     scores = preds
 
+            # AUPRC 기준으로 베스트 모델 갱신
             current_score = average_precision_score(fold_val_targets, scores)
 
+            # 각 메트릭 저장
             metrics_list["f1"].append(sk_f1(fold_val_targets, preds))
             metrics_list["recall"].append(sk_recall(fold_val_targets, preds))
             metrics_list["precision"].append(
@@ -107,6 +116,7 @@ class TrainerWrapper:
                 best_model_path = fold_save_path
                 print(f"   -> New Best Model found! (AUPRC: {best_score:.4f})")
 
+        # 결과 저장 및 출력
         save_data = {
             "model_name": self.model_name,
             "n_splits": n_splits,
@@ -118,7 +128,6 @@ class TrainerWrapper:
         txt_lines.append(f"Experiment: {self.config.wandb.experiment_name}")
         txt_lines.append("-" * 30)
 
-        # 5. 결과 요약 출력
         print(f"\n=== {n_splits}-Fold CV Results ({self.model_name}) ===")
         for k, v in metrics_list.items():
             mean_score = np.mean(v)
@@ -144,11 +153,12 @@ class TrainerWrapper:
                     }
                 )
 
+        # Json 저장
         json_path = os.path.join(self.save_dir, f"cv_results.json")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(save_data, f, indent=4)
 
-        # 2. TXT 저장
+        # TXT 저장
         txt_path = os.path.join(self.save_dir, f"cv_results.txt")
         with open(txt_path, "w", encoding="utf-8") as f:
             f.write("\n".join(txt_lines))
@@ -161,9 +171,10 @@ class TrainerWrapper:
         return best_model_path
 
     def dl_fit(self):
+        """딥러닝 모델(AutoEncoder) 학습 (PyTorch Lightning 사용)"""
         print(f"Start Training: {self.model_name}")
 
-        # 1. Deep Learning (Autoencoder)
+        # Deep Learning (Autoencoder)
         if self.model_name == "AE":
             input_dim = self.dm.train_features.shape[1]
             model = DiabetesAutoEncoder(self.config, input_dim)
@@ -171,6 +182,7 @@ class TrainerWrapper:
             wandb_logger = WandbLogger()
             lr_monitor = LearningRateMonitor(logging_interval="step")
 
+            # 체크포인트 콜백: 최고 성능 모델 저장
             checkpoint_callback = ModelCheckpoint(
                 dirpath=self.save_dir,
                 filename="{epoch:02d}-{val_auprc:.4f}",
@@ -197,39 +209,20 @@ class TrainerWrapper:
                 f"Model '{self.model_name}' is a Machine Learning Model. "
                 "Please use 'wrapper.ml_cv_fit()' for training and evaluation."
             )
-        # 2. Machine Learning (Sklearn)
-        # else:
-        #     model = get_sklearn_model(self.config)
-
-        #     if self.model_name == "IF":
-        #         # Isolation Forest는 정상 데이터로 학습하는 것이 일반적
-        #         print(">> Training Isolation Forest with Normal Data only...")
-        #         train_features = self.dm.get_normal_data()
-        #         model.fit(train_features)
-        #     else:
-        #         # Supervised Learning
-        #         print(f">> Training {self.model_name} with Full Data...")
-        #         train_features, _, train_targets, _ = self.dm.get_sklearn_data()
-        #         model.fit(train_features, train_targets)
-
-        #     # 모델 저장
-        #     save_path = os.path.join(self.save_dir, f"{self.model_name}.pkl")
-        #     joblib.dump(model, save_path)
-        #     print(f"Model saved to {save_path}")
-        #     return model, None
 
     def test(self, model=None, trainer=None):
+        """Test Set에 대한 최종 평가"""
         print(f"\n[Test Stage] Start Testing: {self.model_name}")
 
-        # 1. DL
+        # DL
         if self.model_name == "AE":
             if trainer is None:
                 print("Warning: Trainer is None. Attempting to create new trainer...")
                 trainer = pl.Trainer(accelerator=self.config.system.device, devices=1)
-            # 자동으로 가장 좋은 Checkpoint 로드
+            # 자동으로 가장 좋은 Checkpoint 로드하여 테스트
             trainer.test(datamodule=self.dm, ckpt_path="best")
 
-        # 2. ML
+        # ML
         else:
             if model is None:
                 raise ValueError(f"model is Empty.")
@@ -241,4 +234,5 @@ class TrainerWrapper:
                 test_features,
                 test_targets,
                 model_name=self.model_name,
+                save_dir=self.save_dir,
             )

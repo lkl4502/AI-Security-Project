@@ -18,7 +18,7 @@ data:
 
 model:
   # LR, DT, RF, IF, AE
-  name: "LR"
+  name: "RF"
 
   # AE
   lr: 0.001
@@ -29,6 +29,7 @@ model:
   n_estimators: 100 # RF
   contamination: 0.15 # IF
   max_iter: 1000 # LR
+  max_depth: 12 # DT, RF
   n_jobs: -1 # RF, IF
 
 threshold:
@@ -56,4 +57,4 @@ logging:
 wandb:
   team_name: "lkl4502-kookmin-university"
   project_name: "AI-Security-Project"
-  experiment_name: "baseline-LR"
+  experiment_name: "UNDER-0.5-RF"

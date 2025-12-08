@@ -1,3 +1,4 @@
+import os
 import torch
 import wandb
 import numpy as np
@@ -29,7 +30,7 @@ from sklearn.metrics import (
 )
 
 
-# --- Deep Learning Model (Lightning) ---
+# Deep Learning Model (Lightning)
 class DiabetesAutoEncoder(pl.LightningModule):
     def __init__(self, config, input_dim):
         super().__init__()
@@ -37,29 +38,36 @@ class DiabetesAutoEncoder(pl.LightningModule):
         self.input_dim = input_dim
         self.hidden_dim = self.config.model.hidden_dim
 
+        # encoder -> 입력 데이터를 저차원으로 압축
         self.encoder = nn.Sequential(
             nn.Linear(self.input_dim, 32),
             nn.ReLU(),
             nn.Linear(32, self.hidden_dim),
             nn.ReLU(),
         )
+
+        # decoder -> 압축 데이터를 원래 차원으로 복원
         self.decoder = nn.Sequential(
             nn.Linear(self.hidden_dim, 32),
             nn.ReLU(),
             nn.Linear(32, self.input_dim),
             nn.Sigmoid(),  # MinMaxScaler 전제
         )
+
+        # 재구성 오차 -> 입력과 복원한 데이터 간의 차이
         self.loss_fn = nn.MSELoss(reduction="none")
 
         # Metric 변수 추가
-        self.auroc = BinaryAUROC()  # Val
-        self.auprc = BinaryAveragePrecision()  # Val
-        self.test_step_outputs = []  # Test
+        self.auroc = BinaryAUROC()  # Validation 용
+        self.auprc = BinaryAveragePrecision()  # Validation 용
+        self.test_step_outputs = []  # Test 용
 
     def forward(self, x):
+        """순전파: Encoder -> Decoder"""
         return self.decoder(self.encoder(x))
 
     def training_step(self, batch, batch_idx):
+        """학습 단계: 정상 데이터만으로 재구성 학습"""
         features = batch[0]
         predictions = self(features)
         loss = torch.mean(self.loss_fn(predictions, features))
@@ -69,6 +77,7 @@ class DiabetesAutoEncoder(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
+        """검증 단계: 정상/비정상 데이터를 모두 사용하여 이상 탐지 성능 평가"""
         features, labels = batch
         predictions = self(features)
 
@@ -87,12 +96,14 @@ class DiabetesAutoEncoder(pl.LightningModule):
         return loss
 
     def test_step(self, batch, batch_idx):
+        """테스트 단계: 점수와 라벨 수집"""
         features, labels = batch
         predictions = self(features)
         scores = torch.mean(self.loss_fn(predictions, features), dim=1)
         self.test_step_outputs.append({"scores": scores, "labels": labels})
 
     def on_test_epoch_end(self):
+        """테스트 에폭 종료 후 최종 평가 (Threshold 결정 및 지표 계산)"""
         outputs = self.test_step_outputs
         all_scores = torch.cat([x["scores"] for x in outputs])
         all_labels = torch.cat([x["labels"] for x in outputs]).long()
@@ -110,13 +121,13 @@ class DiabetesAutoEncoder(pl.LightningModule):
         )
         f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-8)
 
-        if self.config.threshold.type == "F1-max":
+        if self.config.threshold.type == "F1-max":  # f1이 최대인 지점 threshold 설정
             best_idx = torch.argmax(f1_scores)
             if best_idx >= len(thresholds):
                 best_idx = -1
             best_threshold = thresholds[best_idx]
 
-        elif self.config.threshold.type == "Top-k":
+        elif self.config.threshold.type == "Top-k":  # 상위 k개 이상치
             k = int(len(all_scores) * self.config.threshold.contamination)
             top_val, _ = torch.topk(all_scores, k)
             best_threshold = top_val[-1]
@@ -142,6 +153,7 @@ class DiabetesAutoEncoder(pl.LightningModule):
         self.log_dict(metrics)
 
     def configure_optimizers(self):
+        """옵티마이저 및 스케줄러 설정"""
         optimizer = torch.optim.Adam(self.parameters(), lr=self.config.model.lr)
 
         scheduler_config = {
@@ -156,8 +168,9 @@ class DiabetesAutoEncoder(pl.LightningModule):
         return {"optimizer": optimizer, "lr_scheduler": scheduler_config}
 
 
-# --- Machine Learning Model Factory ---
+# Machine Learning Model
 def get_sklearn_model(config):
+    """설정 파일에 따라 Scikit-Learn 모델 인스턴스 반환"""
     name = config.model.name
     params = config.model
     seed = config.system.random_seed
@@ -167,11 +180,14 @@ def get_sklearn_model(config):
             class_weight="balanced", random_state=seed, max_iter=params.max_iter
         )
     elif name == "DT":
-        return DecisionTreeClassifier(class_weight="balanced", random_state=seed)
+        return DecisionTreeClassifier(
+            class_weight="balanced", max_depth=params.max_depth, random_state=seed
+        )
     elif name == "RF":
         return RandomForestClassifier(
             n_estimators=params.n_estimators,
             class_weight="balanced",
+            max_depth=params.max_depth,
             random_state=seed,
             n_jobs=params.n_jobs,
         )
@@ -184,14 +200,15 @@ def get_sklearn_model(config):
 
 
 def evaluate_and_log_sklearn(
-    model, test_features, test_targets, model_name, use_wandb=True
+    model, test_features, test_targets, model_name, save_dir, use_wandb=True
 ):
     """
-    Scikit-Learn 모델을 평가하고 딥러닝 모델과 동일한 Metric을 WandB에 로깅하는 함수
+    Scikit-Learn 모델 평가 및 WandB 로깅 함수
+    DL 모델과 동일한 Metric을 사용하여 비교 가능하게 함
     """
     print(f"\n--- Evaluating {model_name} ---")
 
-    # 1. Score 및 Predict 추출
+    # Score 및 Predict 추출
     if isinstance(model, IsolationForest):
         # Isolation Forest: -1(Anomaly), 1(Normal)
         raw_preds = model.predict(test_features)
@@ -199,11 +216,6 @@ def evaluate_and_log_sklearn(
 
         # Score Samples: 높을수록 Normal -> 부호 반전하여 Anomaly Score로 사용
         scores = -model.score_samples(test_features)
-
-        # 시각화를 위한 0~1 정규화
-        s_min, s_max = scores.min(), scores.max()
-        probs = (scores - s_min) / (s_max - s_min + 1e-8)
-
     else:
         # Supervised Models (RF, LR, DT)
         preds = model.predict(test_features)
@@ -212,7 +224,7 @@ def evaluate_and_log_sklearn(
         else:
             scores = preds  # 확률 미지원시 0/1 값
 
-    # 2. Metric 계산 (Scikit-Learn 함수 사용)
+    # Metric 계산 (Scikit-Learn 함수 사용)
     metrics = {
         f"{model_name}/test_accuracy": accuracy_score(test_targets, preds),
         f"{model_name}/test_f1": sk_f1(test_targets, preds),
@@ -224,9 +236,17 @@ def evaluate_and_log_sklearn(
         f"{model_name}/test_auprc": average_precision_score(test_targets, scores),
     }
 
-    # 3. 콘솔 출력 및 WandB 로깅
+    # 콘솔 출력 및 WandB 로깅
     for k, v in metrics.items():
         print(f"{k}: {v:.4f}")
 
     if use_wandb and wandb.run is not None:
         wandb.log(metrics)
+
+    txt_lines = []
+    for k, v in metrics.items():
+        txt_lines.append(f"{k.upper()} : {v:.4f}")
+
+    txt_path = os.path.join(save_dir, "test_results.txt")
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(txt_lines))
